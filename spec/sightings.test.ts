@@ -1,17 +1,17 @@
 import { beforeAll, describe, expect, inject, it } from "vitest";
 
-// The supplied starter's plumbing check: it drives the running app over HTTP
-// to prove the guestbook's two platform claims hold in THIS repo — a message
-// survives a reload, and a new one reaches other clients over the SSE stream.
-// A red run on a fresh clone means the platform is broken, not your work. It
-// describes the starter, so delete it when you replace the starter.
+// Drives the running app over HTTP to prove the two platform claims this
+// spec actually checks hold in THIS repo: a sighting survives a reload, and
+// a new one reaches other clients over the SSE stream. Adapted from the
+// starter's guestbook check (spec/README.md) onto this app's own
+// stop/note shape and event name.
 const baseUrl = inject("baseUrl");
 
-describe("guestbook", () => {
-  let message: string;
+describe("sightings", () => {
+  let note: string;
 
   beforeAll(() => {
-    message = `spec probe ${process.hrtime.bigint()}`;
+    note = `spec probe ${process.hrtime.bigint()}`;
   });
 
   // Astro checks form POSTs carry a same-origin Origin header (CSRF
@@ -24,18 +24,18 @@ describe("guestbook", () => {
       redirect: "manual",
     });
 
-  it("accepts a message and redirects back to the page", async () => {
-    const res = await post("/api/messages", new URLSearchParams({ body: message }));
+  it("accepts a sighting and redirects back to the page", async () => {
+    const res = await post("/api/sightings", new URLSearchParams({ stop: "ANU Rimmer Street", note }));
     expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe("/");
   });
 
-  it("persists the message: a fresh page load includes it", async () => {
+  it("persists the sighting: a fresh page load includes it", async () => {
     const res = await fetch(baseUrl);
-    expect(await res.text()).toContain(message);
+    expect(await res.text()).toContain(note);
   });
 
-  it("broadcasts new messages over the SSE stream", async () => {
+  it("broadcasts new sightings over the SSE stream", async () => {
     const live = `live probe ${process.hrtime.bigint()}`;
 
     // subscribe first, then post, then read until the event arrives
@@ -44,7 +44,7 @@ describe("guestbook", () => {
     const reader = stream.body?.getReader();
     if (!reader) throw new Error("no response body");
 
-    await post("/api/messages", new URLSearchParams({ body: live }));
+    await post("/api/sightings", new URLSearchParams({ stop: "ANU Rimmer Street", note: live }));
 
     const decoder = new TextDecoder();
     let received = "";
@@ -54,7 +54,7 @@ describe("guestbook", () => {
       received += decoder.decode(value, { stream: true });
     }
     await reader.cancel();
-    expect(received).toContain(`data: `);
+    expect(received).toContain("event: sighting");
     expect(received).toContain(live);
   }, 10_000);
 });
