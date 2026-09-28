@@ -16,10 +16,16 @@ cover every deliverable.
 
 ## What I built
 
-A sentence or two. `README.md` is where the account of what the app is and what
-good means here lives; this file is how you got there.
+i built a system to replace the existing Civic bus loop mapping system. to be
+able to be used by students who can enter a destination and get what bus is
+closest to them and what bus they need to take to get to their destination. .
 
 ## How I got here
+
+Based on the brief, the one thing i wanted to change was the bus map and
+timetabling, because i am spontaneous in making plans, i need to know exactly
+when the next buss is coming and what bus i need to take to get somewhere on
+campus.
 
 The account of the process: how the work actually went, and how you knew the
 result was right. Tell it in whatever order makes it clear. A weekly prototype

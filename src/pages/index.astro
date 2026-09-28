@@ -1,9 +1,10 @@
 ---
 import { listSightings } from "../lib/db";
-import { schedule, stops } from "../lib/stops";
+import { nextDeparturesFor, schedule, stops } from "../lib/stops";
 import "../styles.css";
 
 const sightings = listSightings();
+const timetable = stops.map((stop) => ({ stop, next: nextDeparturesFor(stop) }));
 ---
 
 <!doctype html>
@@ -23,6 +24,19 @@ const sightings = listSightings();
         height: 320px;
         border: 1px solid #ccc;
       }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+      }
+      th,
+      td {
+        text-align: left;
+        padding: 0.3rem 0.6rem;
+        border-bottom: 1px solid #ddd;
+      }
+      .nearest {
+        background: #eef6ff;
+      }
     </style>
   </head>
   <body>
@@ -39,10 +53,34 @@ const sightings = listSightings();
         shows up here for everyone else, straight away.
       </p>
       <p>
-        Runs {schedule.days}, {schedule.first}–{schedule.last}, every {" "}
-        {schedule.frequencyMinutes} minutes. Clockwise loop, 12 stops.
+        Runs {schedule.days}, from {" "}
+        <span id="first-time" /> to <span id="last-time" />, every ~
+        {schedule.frequencyMinutes} minutes. Clockwise loop, {stops.length} stops.
       </p>
+      <button id="locate">Find my nearest stop</button>
+      <p id="locate-status" role="status"></p>
       <div id="map"></div>
+
+      <h2>Timetable (next departures)</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Stop</th>
+            <th>Next departures</th>
+          </tr>
+        </thead>
+        <tbody>
+          {timetable.map(({ stop, next }) => (
+            <tr id={`row-${stop.id}`} data-stop-id={stop.id}>
+              <td>
+                {stop.name}
+                {stop.note && <em> ({stop.note})</em>}
+              </td>
+              <td>{next.length > 0 ? next.join(", ") : "no more today"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
 
       <h2>Report a sighting</h2>
       <form method="post" action="/api/sightings">
@@ -73,21 +111,90 @@ const sightings = listSightings();
       integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
       crossorigin=""
     ></script>
-    <script type="module" define:vars={{ stops }}>
-      const map = L.map("map").setView([-35.2785, 149.121], 15);
+    <script
+      type="module"
+      define:vars={{ stops, firstMinutes: schedule.firstMinutes, lastMinutes: schedule.lastMinutes }}
+    >
+      function formatTime(minutes) {
+        const h24 = Math.floor(minutes / 60) % 24;
+        const m = Math.round(minutes % 60);
+        const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+        return `${h12}:${String(m).padStart(2, "0")}${h24 < 12 ? "am" : "pm"}`;
+      }
+      document.querySelector("#first-time").textContent = formatTime(firstMinutes);
+      document.querySelector("#last-time").textContent = formatTime(lastMinutes);
+
+      const map = L.map("map").setView([-35.279, 149.122], 15);
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         attribution: "&copy; OpenStreetMap contributors",
         maxZoom: 19,
       }).addTo(map);
 
       const select = document.querySelector("#stop");
+      const markers = {};
       for (const stop of stops) {
+        const directionsUrl = `https://www.google.com/maps/dir/?api=1&destination=${stop.lat},${stop.lng}&travelmode=walking`;
         const marker = L.marker([stop.lat, stop.lng]).addTo(map);
-        marker.bindPopup(`<strong>${stop.name}</strong>${stop.note ? `<br>${stop.note}` : ""}`);
+        marker.bindPopup(
+          `<strong>${stop.name}</strong>${stop.note ? `<br>${stop.note}` : ""}<br><a href="${directionsUrl}" target="_blank" rel="noopener">Walking directions</a>`,
+        );
         marker.on("click", () => {
           if (select) select.value = stop.name;
         });
+        markers[stop.id] = marker;
       }
+
+      // haversine, metres — good enough to rank "which stop is closest",
+      // not for turn-by-turn distance
+      function distanceMetres(lat1, lng1, lat2, lng2) {
+        const R = 6371000;
+        const toRad = (d) => (d * Math.PI) / 180;
+        const dLat = toRad(lat2 - lat1);
+        const dLng = toRad(lng2 - lng1);
+        const a =
+          Math.sin(dLat / 2) ** 2 +
+          Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+        return 2 * R * Math.asin(Math.sqrt(a));
+      }
+
+      const locateButton = document.querySelector("#locate");
+      const status = document.querySelector("#locate-status");
+      locateButton?.addEventListener("click", () => {
+        if (!navigator.geolocation) {
+          status.textContent = "Geolocation isn't available in this browser.";
+          return;
+        }
+        status.textContent = "Locating…";
+        navigator.geolocation.getCurrentPosition(
+          (position) => {
+            const { latitude, longitude } = position.coords;
+            L.marker([latitude, longitude], {
+              icon: L.divIcon({ className: "", html: "📍", iconSize: [24, 24] }),
+            })
+              .addTo(map)
+              .bindPopup("You are here")
+              .openPopup();
+
+            let nearest = null;
+            for (const stop of stops) {
+              const d = distanceMetres(latitude, longitude, stop.lat, stop.lng);
+              document.querySelector(`#row-${stop.id}`)?.classList.remove("nearest");
+              if (!nearest || d < nearest.d) nearest = { stop, d };
+            }
+            if (nearest) {
+              const row = document.querySelector(`#row-${nearest.stop.id}`);
+              row?.classList.add("nearest");
+              row?.scrollIntoView({ behavior: "smooth", block: "center" });
+              status.textContent = `Nearest stop: ${nearest.stop.name} (~${Math.round(nearest.d)}m away)`;
+              markers[nearest.stop.id]?.openPopup();
+              map.panTo([nearest.stop.lat, nearest.stop.lng]);
+            }
+          },
+          (error) => {
+            status.textContent = `Couldn't get your location: ${error.message}`;
+          },
+        );
+      });
 
       // The live half: subscribe to the SSE stream and prepend sightings as
       // they arrive. The form itself needs none of this — its POST +
