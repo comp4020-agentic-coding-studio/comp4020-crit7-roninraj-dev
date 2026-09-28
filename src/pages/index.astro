@@ -57,54 +57,81 @@ const timetable = stops.map((stop) => ({ stop, next: nextDeparturesFor(stop) }))
         <span id="first-time" /> to <span id="last-time" />, every ~
         {schedule.frequencyMinutes} minutes. Clockwise loop, {stops.length} stops.
       </p>
-      <button id="locate">Find my nearest stop</button>
-      <p id="locate-status" role="status"></p>
-      <div id="map"></div>
+      <section class="card">
+        <p id="locate-status" role="status" data-kind="pending">Locating…</p>
+        <div id="map"></div>
+      </section>
 
-      <h2>Timetable (next departures)</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>Stop</th>
-            <th>Next departures</th>
-          </tr>
-        </thead>
-        <tbody>
-          {timetable.map(({ stop, next }) => (
-            <tr id={`row-${stop.id}`} data-stop-id={stop.id}>
-              <td>
-                {stop.name}
-                {stop.note && <em> ({stop.note})</em>}
-              </td>
-              <td>{next.length > 0 ? next.join(", ") : "no more today"}</td>
+      <section class="card">
+        <h2>Plan a trip</h2>
+        <form id="trip-form">
+          <label for="trip-start">Start</label>
+          <input id="trip-start" name="start" placeholder="address, or leave blank for your location" />
+          <div class="field">
+            <label for="trip-dest">Destination</label>
+            <input
+              id="trip-dest"
+              name="dest"
+              required
+              autocomplete="off"
+              placeholder="address, e.g. Canberra Centre"
+            />
+            <ul id="dest-suggestions" class="suggestions" hidden></ul>
+          </div>
+          <button>Plan route</button>
+        </form>
+        <p id="trip-status" role="status"></p>
+        <ol id="trip-steps"></ol>
+      </section>
+
+      <section class="card">
+        <h2>Timetable (next departures)</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Stop</th>
+              <th>Next departures</th>
             </tr>
+          </thead>
+          <tbody>
+            {timetable.map(({ stop, next }) => (
+              <tr id={`row-${stop.id}`} data-stop-id={stop.id}>
+                <td>
+                  {stop.name}
+                  {stop.note && <em> ({stop.note})</em>}
+                </td>
+                <td>{next.length > 0 ? next.join(", ") : "no more today"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+
+      <section class="card">
+        <h2>Report a sighting</h2>
+        <form method="post" action="/api/sightings">
+          <label for="stop">Stop</label>
+          <select id="stop" name="stop" required>
+            {stops.map((stop) => <option value={stop.name}>{stop.name}</option>)}
+          </select>
+          <label for="note">What did you see?</label>
+          <input
+            id="note"
+            name="note"
+            required
+            maxlength="280"
+            placeholder="e.g. bus just left, 5 min late, standing room only"
+          />
+          <button>Report</button>
+        </form>
+
+        <h3>Recent sightings</h3>
+        <ul id="sightings">
+          {sightings.map((sighting) => (
+            <li><strong>{sighting.stop}</strong> — {sighting.note}</li>
           ))}
-        </tbody>
-      </table>
-
-      <h2>Report a sighting</h2>
-      <form method="post" action="/api/sightings">
-        <label for="stop">Stop</label>
-        <select id="stop" name="stop" required>
-          {stops.map((stop) => <option value={stop.name}>{stop.name}</option>)}
-        </select>
-        <label for="note">What did you see?</label>
-        <input
-          id="note"
-          name="note"
-          required
-          maxlength="280"
-          placeholder="e.g. bus just left, 5 min late, standing room only"
-        />
-        <button>Report</button>
-      </form>
-
-      <h2>Recent sightings</h2>
-      <ul id="sightings">
-        {sightings.map((sighting) => (
-          <li><strong>{sighting.stop}</strong> — {sighting.note}</li>
-        ))}
-      </ul>
+        </ul>
+      </section>
     </main>
     <script
       src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
@@ -113,7 +140,12 @@ const timetable = stops.map((stop) => ({ stop, next: nextDeparturesFor(stop) }))
     ></script>
     <script
       type="module"
-      define:vars={{ stops, firstMinutes: schedule.firstMinutes, lastMinutes: schedule.lastMinutes }}
+      define:vars={{
+        stops,
+        firstMinutes: schedule.firstMinutes,
+        lastMinutes: schedule.lastMinutes,
+        frequencyMinutes: schedule.frequencyMinutes,
+      }}
     >
       function formatTime(minutes) {
         const h24 = Math.floor(minutes / 60) % 24;
@@ -124,11 +156,16 @@ const timetable = stops.map((stop) => ({ stop, next: nextDeparturesFor(stop) }))
       document.querySelector("#first-time").textContent = formatTime(firstMinutes);
       document.querySelector("#last-time").textContent = formatTime(lastMinutes);
 
-      const map = L.map("map").setView([-35.279, 149.122], 15);
+      // Route only covers ANU and Civic — pad the stops' own bounding box
+      // rather than showing the whole city.
+      const routeBounds = L.latLngBounds(stops.map((stop) => [stop.lat, stop.lng])).pad(0.25);
+      const map = L.map("map", { maxBounds: routeBounds, maxBoundsViscosity: 0.9 }).fitBounds(routeBounds);
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         attribution: "&copy; OpenStreetMap contributors",
         maxZoom: 19,
+        minZoom: map.getBoundsZoom(routeBounds),
       }).addTo(map);
+      const routeLayer = L.layerGroup().addTo(map);
 
       const select = document.querySelector("#stop");
       const markers = {};
@@ -144,6 +181,36 @@ const timetable = stops.map((stop) => ({ stop, next: nextDeparturesFor(stop) }))
         markers[stop.id] = marker;
       }
 
+      // The loop's real visiting order — offsetMinutes, not array order (the
+      // 6:48pm-only Canberra Centre detour sits out of array order).
+      const loopOrder = [...stops].sort((a, b) => a.offsetMinutes - b.offsetMinutes);
+      function routeStops(boardStop, alightStop) {
+        const boardIdx = loopOrder.findIndex((s) => s.id === boardStop.id);
+        const alightIdx = loopOrder.findIndex((s) => s.id === alightStop.id);
+        if (alightIdx > boardIdx) return loopOrder.slice(boardIdx, alightIdx + 1);
+        // alight comes "before" board in the loop — ride past the end and
+        // around again. ponytail: straight line for the unmapped return leg
+        // back to Rimmer St, not the real street geometry.
+        return [...loopOrder.slice(boardIdx), ...loopOrder.slice(0, alightIdx + 1)];
+      }
+
+      function drawRoute(startCoords, boardStop, alightStop, destCoords) {
+        routeLayer.clearLayers();
+        const walkStyle = { color: "#0b5fff", weight: 3, dashArray: "6,8" };
+        const busStyle = { color: "#0b5fff", weight: 4 };
+        const walk1 = L.polyline([[startCoords.lat, startCoords.lng], [boardStop.lat, boardStop.lng]], walkStyle).addTo(
+          routeLayer,
+        );
+        const bus = L.polyline(
+          routeStops(boardStop, alightStop).map((s) => [s.lat, s.lng]),
+          busStyle,
+        ).addTo(routeLayer);
+        const walk2 = L.polyline([[alightStop.lat, alightStop.lng], [destCoords.lat, destCoords.lng]], walkStyle).addTo(
+          routeLayer,
+        );
+        map.fitBounds(walk1.getBounds().extend(bus.getBounds()).extend(walk2.getBounds()).pad(0.1));
+      }
+
       // haversine, metres — good enough to rank "which stop is closest",
       // not for turn-by-turn distance
       function distanceMetres(lat1, lng1, lat2, lng2) {
@@ -157,43 +224,220 @@ const timetable = stops.map((stop) => ({ stop, next: nextDeparturesFor(stop) }))
         return 2 * R * Math.asin(Math.sqrt(a));
       }
 
-      const locateButton = document.querySelector("#locate");
+      function nearestStop(lat, lng) {
+        let nearest = null;
+        for (const stop of stops) {
+          const d = distanceMetres(lat, lng, stop.lat, stop.lng);
+          if (!nearest || d < nearest.d) nearest = { stop, d };
+        }
+        return nearest;
+      }
+
+      function highlightNearest(nearest) {
+        for (const stop of stops) document.querySelector(`#row-${stop.id}`)?.classList.remove("nearest");
+        if (!nearest) return;
+        const row = document.querySelector(`#row-${nearest.stop.id}`);
+        row?.classList.add("nearest");
+        row?.scrollIntoView({ behavior: "smooth", block: "center" });
+        markers[nearest.stop.id]?.openPopup();
+        map.panTo([nearest.stop.lat, nearest.stop.lng]);
+      }
+
       const status = document.querySelector("#locate-status");
-      locateButton?.addEventListener("click", () => {
+      function setStatus(el, text, kind = "pending") {
+        el.textContent = text;
+        el.dataset.kind = kind;
+      }
+
+      // filled in once geolocation resolves; the trip planner falls back to
+      // this when the "start" field is left blank or untouched
+      let here = null;
+      const startField = document.querySelector("#trip-start");
+      let startIsAuto = false;
+      startField?.addEventListener("input", () => {
+        startIsAuto = false;
+      });
+
+      // Runs on load, no button needed — the browser's own geolocation
+      // prompt is the confirmation step.
+      function locateMe() {
         if (!navigator.geolocation) {
-          status.textContent = "Geolocation isn't available in this browser.";
+          setStatus(status, "Geolocation isn't available in this browser — type a start address below.", "error");
           return;
         }
-        status.textContent = "Locating…";
         navigator.geolocation.getCurrentPosition(
           (position) => {
-            const { latitude, longitude } = position.coords;
-            L.marker([latitude, longitude], {
+            here = { lat: position.coords.latitude, lng: position.coords.longitude };
+            L.marker([here.lat, here.lng], {
               icon: L.divIcon({ className: "", html: "📍", iconSize: [24, 24] }),
             })
               .addTo(map)
-              .bindPopup("You are here")
-              .openPopup();
-
-            let nearest = null;
-            for (const stop of stops) {
-              const d = distanceMetres(latitude, longitude, stop.lat, stop.lng);
-              document.querySelector(`#row-${stop.id}`)?.classList.remove("nearest");
-              if (!nearest || d < nearest.d) nearest = { stop, d };
-            }
-            if (nearest) {
-              const row = document.querySelector(`#row-${nearest.stop.id}`);
-              row?.classList.add("nearest");
-              row?.scrollIntoView({ behavior: "smooth", block: "center" });
-              status.textContent = `Nearest stop: ${nearest.stop.name} (~${Math.round(nearest.d)}m away)`;
-              markers[nearest.stop.id]?.openPopup();
-              map.panTo([nearest.stop.lat, nearest.stop.lng]);
-            }
+              .bindPopup("You are here");
+            const nearest = nearestStop(here.lat, here.lng);
+            highlightNearest(nearest);
+            setStatus(status, `Nearest stop: ${nearest.stop.name} (~${Math.round(nearest.d)}m away)`, "ok");
+            reverseGeocode(here.lat, here.lng).then((label) => {
+              if (label && startField && !startField.value) {
+                startField.value = label;
+                startField.placeholder = "address, or leave blank for your location";
+                startIsAuto = true;
+              }
+            });
           },
           (error) => {
-            status.textContent = `Couldn't get your location: ${error.message}`;
+            setStatus(status, `Couldn't get your location (${error.message}) — type a start address below.`, "error");
           },
         );
+      }
+      locateMe();
+
+      // Free, no-key geocoder — fine for a few lookups per visit.
+      // ponytail: no caching/backoff for Nominatim's ~1req/s usage policy;
+      // add a debounce if this gets real traffic.
+      async function geocode(address) {
+        const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(address)}`;
+        const res = await fetch(url);
+        const results = await res.json();
+        if (!results.length) return null;
+        return { lat: parseFloat(results[0].lat), lng: parseFloat(results[0].lon) };
+      }
+
+      // Just for the label in the start field — never blocks the trip
+      // planner, which already has the coords from geolocation.
+      async function reverseGeocode(lat, lng) {
+        try {
+          const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`;
+          const res = await fetch(url);
+          const result = await res.json();
+          return result.display_name ?? null;
+        } catch {
+          return null;
+        }
+      }
+
+      // Same loop, ridden forward by stop order; if the alight stop comes
+      // "before" the board stop in that order you go around again next trip.
+      function boardAndAlight(boardStop, alightStop, now = new Date()) {
+        const nowMinutes = now.getHours() * 60 + now.getMinutes();
+        let trip = Math.ceil((nowMinutes - boardStop.offsetMinutes - firstMinutes) / frequencyMinutes);
+        if (trip < 0) trip = 0;
+        const departureAtRimmer = firstMinutes + trip * frequencyMinutes;
+        if (departureAtRimmer > lastMinutes) return null;
+        const wrapsAround = alightStop.offsetMinutes <= boardStop.offsetMinutes;
+        const alightDeparture = wrapsAround ? departureAtRimmer + frequencyMinutes : departureAtRimmer;
+        if (alightDeparture > lastMinutes) return null;
+        return {
+          board: departureAtRimmer + boardStop.offsetMinutes,
+          alight: alightDeparture + alightStop.offsetMinutes,
+        };
+      }
+
+      function walkingDirectionsUrl(from, to) {
+        return `https://www.google.com/maps/dir/?api=1&origin=${from.lat},${from.lng}&destination=${to.lat},${to.lng}&travelmode=walking`;
+      }
+
+      // Nominatim search, biased to the route's own area so "Civic" resolves
+      // to Canberra's Civic and not some other Civic on the far side of the
+      // country.
+      const destField = document.querySelector("#trip-dest");
+      const destSuggestions = document.querySelector("#dest-suggestions");
+      let destSelectedCoords = null;
+      let suggestTimer = null;
+      destField?.addEventListener("input", () => {
+        destSelectedCoords = null;
+        clearTimeout(suggestTimer);
+        const query = destField.value.trim();
+        if (query.length < 3) {
+          destSuggestions.hidden = true;
+          destSuggestions.innerHTML = "";
+          return;
+        }
+        suggestTimer = setTimeout(() => searchDestinations(query), 300);
+      });
+      document.addEventListener("click", (event) => {
+        if (event.target !== destField && !destSuggestions.contains(event.target)) destSuggestions.hidden = true;
+      });
+
+      async function searchDestinations(query) {
+        const box = routeBounds;
+        const viewbox = `${box.getWest()},${box.getNorth()},${box.getEast()},${box.getSouth()}`;
+        const url = `https://nominatim.openstreetmap.org/search?format=json&limit=5&viewbox=${viewbox}&bounded=1&q=${encodeURIComponent(query)}`;
+        try {
+          const res = await fetch(url);
+          const results = await res.json();
+          destSuggestions.innerHTML = "";
+          for (const result of results) {
+            const item = document.createElement("li");
+            item.textContent = result.display_name;
+            item.addEventListener("click", () => {
+              destField.value = result.display_name;
+              destSelectedCoords = { lat: parseFloat(result.lat), lng: parseFloat(result.lon) };
+              destSuggestions.hidden = true;
+            });
+            destSuggestions.appendChild(item);
+          }
+          destSuggestions.hidden = results.length === 0;
+        } catch {
+          destSuggestions.hidden = true;
+        }
+      }
+
+      const tripForm = document.querySelector("#trip-form");
+      const tripStatus = document.querySelector("#trip-status");
+      const tripSteps = document.querySelector("#trip-steps");
+      tripForm?.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        tripSteps.innerHTML = "";
+        setStatus(tripStatus, "Planning…");
+        const startText = tripForm.start.value.trim();
+        const destText = tripForm.dest.value.trim();
+        try {
+          const startCoords = !startText || startIsAuto ? here : await geocode(startText);
+          if (!startCoords) {
+            setStatus(
+              tripStatus,
+              startText ? `Couldn't find "${startText}".` : "No start location yet — allow geolocation, or type a start address.",
+              "error",
+            );
+            return;
+          }
+          const destCoords = destSelectedCoords ?? (await geocode(destText));
+          if (!destCoords) {
+            setStatus(tripStatus, `Couldn't find "${destText}".`, "error");
+            return;
+          }
+
+          const board = nearestStop(startCoords.lat, startCoords.lng);
+          const alight = nearestStop(destCoords.lat, destCoords.lng);
+          tripStatus.textContent = "";
+
+          if (board.stop.id === alight.stop.id) {
+            tripSteps.innerHTML = `<li>Start and destination are both nearest ${board.stop.name} — just walk, no bus needed.</li>`;
+            routeLayer.clearLayers();
+            L.polyline(
+              [
+                [startCoords.lat, startCoords.lng],
+                [destCoords.lat, destCoords.lng],
+              ],
+              { color: "#0b5fff", weight: 3, dashArray: "6,8" },
+            ).addTo(routeLayer);
+            return;
+          }
+
+          const times = boardAndAlight(board.stop, alight.stop);
+          tripSteps.innerHTML = `
+            <li>Walk to <strong>${board.stop.name}</strong> (~${Math.round(board.d)}m) —
+              <a href="${walkingDirectionsUrl(startCoords, board.stop)}" target="_blank" rel="noopener">directions</a></li>
+            <li>${times ? `Board the bus at ${formatTime(times.board)}` : "No more buses today"}</li>
+            <li>Get off at <strong>${alight.stop.name}</strong>${times ? ` (~${formatTime(times.alight)})` : ""}</li>
+            <li>Walk to your destination (~${Math.round(alight.d)}m) —
+              <a href="${walkingDirectionsUrl(destCoords, alight.stop)}" target="_blank" rel="noopener">directions</a></li>
+          `;
+          highlightNearest(board);
+          drawRoute(startCoords, board.stop, alight.stop, destCoords);
+        } catch (error) {
+          setStatus(tripStatus, `Something went wrong: ${error.message}`, "error");
+        }
       });
 
       // The live half: subscribe to the SSE stream and prepend sightings as
