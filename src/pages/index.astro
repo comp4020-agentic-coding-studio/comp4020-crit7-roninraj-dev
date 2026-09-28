@@ -1,6 +1,6 @@
 ---
 import { listSightings } from "../lib/db";
-import { nextDeparturesFor, schedule, stops } from "../lib/stops";
+import { nextDeparturesFor, rimmerDepartures, schedule, stops } from "../lib/stops";
 import "../styles.css";
 
 const sightings = listSightings();
@@ -67,6 +67,8 @@ const timetable = stops.map((stop) => ({ stop, next: nextDeparturesFor(stop) }))
         <form id="trip-form">
           <label for="trip-start">Start</label>
           <input id="trip-start" name="start" placeholder="address, or leave blank for your location" />
+          <label for="trip-time">Time</label>
+          <input id="trip-time" name="time" type="time" />
           <div class="field">
             <label for="trip-dest">Destination</label>
             <input
@@ -144,7 +146,7 @@ const timetable = stops.map((stop) => ({ stop, next: nextDeparturesFor(stop) }))
         stops,
         firstMinutes: schedule.firstMinutes,
         lastMinutes: schedule.lastMinutes,
-        frequencyMinutes: schedule.frequencyMinutes,
+        rimmerDepartures,
       }}
     >
       function formatTime(minutes) {
@@ -181,9 +183,10 @@ const timetable = stops.map((stop) => ({ stop, next: nextDeparturesFor(stop) }))
         markers[stop.id] = marker;
       }
 
-      // The loop's real visiting order — offsetMinutes, not array order (the
-      // 6:48pm-only Canberra Centre detour sits out of array order).
-      const loopOrder = [...stops].sort((a, b) => a.offsetMinutes - b.offsetMinutes);
+      // The loop's real visiting order — offsetMinutes, not array order.
+      // Canberra Centre is excluded: it's a once-a-day detour, not part of
+      // the regular loop geometry, so it'd draw a nonsense jump across town.
+      const loopOrder = stops.filter((s) => !s.specialOnly).sort((a, b) => a.offsetMinutes - b.offsetMinutes);
       function routeStops(boardStop, alightStop) {
         const boardIdx = loopOrder.findIndex((s) => s.id === boardStop.id);
         const alightIdx = loopOrder.findIndex((s) => s.id === alightStop.id);
@@ -317,19 +320,20 @@ const timetable = stops.map((stop) => ({ stop, next: nextDeparturesFor(stop) }))
 
       // Same loop, ridden forward by stop order; if the alight stop comes
       // "before" the board stop in that order you go around again next trip.
+      // Reads the real published departure list, not a uniform headway — the
+      // last service of the day breaks cadence, so a computed frequency
+      // would get it wrong.
       function boardAndAlight(boardStop, alightStop, now = new Date()) {
         const nowMinutes = now.getHours() * 60 + now.getMinutes();
-        let trip = Math.ceil((nowMinutes - boardStop.offsetMinutes - firstMinutes) / frequencyMinutes);
-        if (trip < 0) trip = 0;
-        const departureAtRimmer = firstMinutes + trip * frequencyMinutes;
-        if (departureAtRimmer > lastMinutes) return null;
         const wrapsAround = alightStop.offsetMinutes <= boardStop.offsetMinutes;
-        const alightDeparture = wrapsAround ? departureAtRimmer + frequencyMinutes : departureAtRimmer;
-        if (alightDeparture > lastMinutes) return null;
-        return {
-          board: departureAtRimmer + boardStop.offsetMinutes,
-          alight: alightDeparture + alightStop.offsetMinutes,
-        };
+        for (let i = 0; i < rimmerDepartures.length; i++) {
+          const boardTime = rimmerDepartures[i] + boardStop.offsetMinutes;
+          if (boardTime <= nowMinutes) continue;
+          const alightDeparture = wrapsAround ? rimmerDepartures[i + 1] : rimmerDepartures[i];
+          if (alightDeparture === undefined) return null;
+          return { board: boardTime, alight: alightDeparture + alightStop.offsetMinutes };
+        }
+        return null;
       }
 
       function walkingDirectionsUrl(from, to) {
@@ -410,6 +414,12 @@ const timetable = stops.map((stop) => ({ stop, next: nextDeparturesFor(stop) }))
           const board = nearestStop(startCoords.lat, startCoords.lng);
           const alight = nearestStop(destCoords.lat, destCoords.lng);
           tripStatus.textContent = "";
+
+          const special = board.stop.specialOnly ? board.stop : alight.stop.specialOnly ? alight.stop : null;
+          if (special) {
+            tripSteps.innerHTML = `<li>${special.name} is only served by the once-a-day 6:48pm run — the regular timetable doesn't cover it.</li>`;
+            return;
+          }
 
           if (board.stop.id === alight.stop.id) {
             tripSteps.innerHTML = `<li>Start and destination are both nearest ${board.stop.name} — just walk, no bus needed.</li>`;

@@ -1,4 +1,4 @@
-// Real stops, coordinates and schedule for the ANU–Civic Loop bus
+// Real stops, coordinates and timetable for the ANU–Civic Loop bus
 // (clockwise), from ANU's own published sources as of 2026-09-28:
 // - timetable: https://sustainability.anu.edu.au/strategy/transport/anu-civic-loop-bus-timetable
 // - stop coordinates: ANU's "17 August Route" layer of its own Google My Maps
@@ -10,8 +10,10 @@ export type Stop = {
   name: string;
   lat: number;
   lng: number;
-  /** minutes after the loop's Rimmer Street departure this stop is reached */
+  /** minutes after the loop's Rimmer Street departure this stop is reached on a normal run */
   offsetMinutes: number;
+  /** only served on one specific run per day — see `canberraCentreDeparture` below */
+  specialOnly?: boolean;
   note?: string;
 };
 
@@ -23,6 +25,7 @@ export const stops: Stop[] = [
     lat: -35.2798581,
     lng: 149.1337936,
     offsetMinutes: 8,
+    specialOnly: true,
     note: "6:48pm service only",
   },
   { id: "alinga", name: "City West Alinga Street", lat: -35.2780715, lng: 149.1269798, offsetMinutes: 2 },
@@ -31,7 +34,7 @@ export const stops: Stop[] = [
     name: "Marcus Clarke Street after Farrell Place",
     lat: -35.2812347,
     lng: 149.1240973,
-    offsetMinutes: 4,
+    offsetMinutes: 5,
   },
   {
     id: "liversidge",
@@ -52,38 +55,48 @@ export const stops: Stop[] = [
     name: "Garran Road at Graduate House",
     lat: -35.2823591,
     lng: 149.1162337,
-    offsetMinutes: 9,
+    offsetMinutes: 7,
   },
-  { id: "ward", name: "Ward Street (via Yukeembruk)", lat: -35.2810065, lng: 149.1129976, offsetMinutes: 11 },
-  { id: "dickson", name: "Dickson Road (via Wamburun)", lat: -35.2777532, lng: 149.1135012, offsetMinutes: 13 },
+  { id: "ward", name: "Ward Street (via Yukeembruk)", lat: -35.2810065, lng: 149.1129976, offsetMinutes: 8 },
+  { id: "dickson", name: "Dickson Road (via Wamburun)", lat: -35.2777532, lng: 149.1135012, offsetMinutes: 12 },
   {
     id: "daley-burton-garran",
     name: "Daley Road at Burton & Garran Hall",
     lat: -35.2763621,
     lng: 149.1155729,
-    offsetMinutes: 14,
+    offsetMinutes: 13,
   },
   {
     id: "daley-bruce",
     name: "Daley Road at Bruce Hall",
     lat: -35.2741269,
     lng: 149.1173918,
-    offsetMinutes: 15,
+    offsetMinutes: 14,
   },
   {
     id: "daley-fulton-muir",
     name: "Daley Road at Fulton Muir",
     lat: -35.2737073,
     lng: 149.1204985,
-    offsetMinutes: 17,
+    offsetMinutes: 15,
   },
+];
+
+// Every "ANU Rimmer Street" departure, Mon-Fri, minutes since midnight —
+// transcribed straight from the published timetable, not a computed
+// approximation: it's a flat 25-minute headway all day *except* the very
+// last service, which runs 38 minutes after the second-last one (7:18pm,
+// not the 7:05pm a uniform headway would predict).
+export const rimmerDepartures = [
+  470, 495, 520, 545, 570, 595, 620, 645, 670, 695, 720, 745, 770, 795, 820, 845, 870, 895, 920, 945, 970, 995, 1020,
+  1045, 1070, 1095, 1120, 1158,
 ];
 
 export const schedule = {
   days: "Monday to Friday",
-  firstMinutes: 7 * 60 + 50, // 7:50am
-  lastMinutes: 19 * 60 + 18, // 7:18pm
-  frequencyMinutes: 22, // published as "every 20-25 minutes"; 22 is the midpoint used for the computed timetable below
+  firstMinutes: rimmerDepartures[0],
+  lastMinutes: rimmerDepartures[rimmerDepartures.length - 1],
+  frequencyMinutes: 25,
 };
 
 function formatTime(minutesSinceMidnight: number): string {
@@ -94,24 +107,19 @@ function formatTime(minutesSinceMidnight: number): string {
   return `${h12}:${String(m).padStart(2, "0")}${suffix}`;
 }
 
-// The published timetable gives a first/last departure and a frequency band
-// for the loop's start (Rimmer Street), not a per-stop timetable — so this
-// projects each stop's arrivals from that plus its measured offset into the
-// loop.
-// ponytail: a fixed 22-minute headway and straight per-stop offsets, not the
-// real (20-25 min, traffic-dependent) timing — upgrade to real-time
-// vehicle positions if ANU ever exposes them; the sightings board is the
-// stand-in for that until then.
+// The timetable's Canberra Centre column only ever has one time in it: 6:48pm,
+// 8 minutes after the second-last (6:40pm) Rimmer Street departure. Every
+// other run skips it, so it isn't part of the regular offset table above.
+const canberraCentreDeparture = rimmerDepartures[rimmerDepartures.length - 2] + 8;
+
 export function nextDeparturesFor(stop: Stop, count = 3, now = new Date()): string[] {
   const nowMinutes = now.getHours() * 60 + now.getMinutes();
-  const times: string[] = [];
-  let trip = Math.ceil((nowMinutes - stop.offsetMinutes - schedule.firstMinutes) / schedule.frequencyMinutes);
-  if (trip < 0) trip = 0;
-  while (times.length < count) {
-    const departureAtRimmer = schedule.firstMinutes + trip * schedule.frequencyMinutes;
-    if (departureAtRimmer > schedule.lastMinutes) break;
-    times.push(formatTime(departureAtRimmer + stop.offsetMinutes));
-    trip += 1;
+  if (stop.specialOnly) {
+    return canberraCentreDeparture > nowMinutes ? [formatTime(canberraCentreDeparture)] : [];
   }
-  return times;
+  return rimmerDepartures
+    .map((departure) => departure + stop.offsetMinutes)
+    .filter((time) => time > nowMinutes)
+    .slice(0, count)
+    .map(formatTime);
 }
