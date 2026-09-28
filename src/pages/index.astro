@@ -1,8 +1,9 @@
 ---
-import { listMessages } from "../lib/db";
+import { listSightings } from "../lib/db";
+import { schedule, stops } from "../lib/stops";
 import "../styles.css";
 
-const messages = listMessages();
+const sightings = listSightings();
 ---
 
 <!doctype html>
@@ -10,42 +11,94 @@ const messages = listMessages();
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>COMP4020 prototype</title>
+    <title>ANU Civic Loop — live stop board</title>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    />
+    <style>
+      #map {
+        height: 320px;
+        border: 1px solid #ccc;
+      }
+    </style>
   </head>
   <body>
     <nav aria-label="site">
-      <a href="/">Guestbook</a>
+      <a href="/">Civic Loop board</a>
       <a href="/readme/">About</a>
     </nav>
     <main>
-      <h1>Guestbook</h1>
+      <h1>ANU–Civic Loop, live stop board</h1>
       <p>
-        A minimal full-stack starter: messages live in SQLite on the machine's
-        volume (state survives a reload and a redeploy), and new messages
-        appear in every open tab over a server-sent-events stream — open this
-        page twice and sign it in one. Replace all of this with your own
-        prototype.
+        The Civic Loop bus has a fixed timetable but no live tracking, so
+        there's no way to tell "did I just miss it?" from the stop. This board
+        crowd-sources that: anyone at a stop can report what they see, and it
+        shows up here for everyone else, straight away.
       </p>
-      <form method="post" action="/api/messages">
-        <label for="body">Leave a message</label>
-        <input id="body" name="body" required maxlength="500" />
-        <button>Sign</button>
+      <p>
+        Runs {schedule.days}, {schedule.first}–{schedule.last}, every {" "}
+        {schedule.frequencyMinutes} minutes. Clockwise loop, 12 stops.
+      </p>
+      <div id="map"></div>
+
+      <h2>Report a sighting</h2>
+      <form method="post" action="/api/sightings">
+        <label for="stop">Stop</label>
+        <select id="stop" name="stop" required>
+          {stops.map((stop) => <option value={stop.name}>{stop.name}</option>)}
+        </select>
+        <label for="note">What did you see?</label>
+        <input
+          id="note"
+          name="note"
+          required
+          maxlength="280"
+          placeholder="e.g. bus just left, 5 min late, standing room only"
+        />
+        <button>Report</button>
       </form>
-      <ul id="messages">
-        {messages.map((message) => <li>{message.body}</li>)}
+
+      <h2>Recent sightings</h2>
+      <ul id="sightings">
+        {sightings.map((sighting) => (
+          <li><strong>{sighting.stop}</strong> — {sighting.note}</li>
+        ))}
       </ul>
     </main>
-    <script>
-      // The live half of the demo: subscribe to the SSE stream and prepend
-      // messages as they arrive. The form itself needs none of this — its
-      // POST + redirect re-renders the submitting tab from SQLite; this
-      // stream is how every other tab finds out.
-      const list = document.querySelector("#messages");
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+    <script type="module" define:vars={{ stops }}>
+      const map = L.map("map").setView([-35.2785, 149.121], 15);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        attribution: "&copy; OpenStreetMap contributors",
+        maxZoom: 19,
+      }).addTo(map);
+
+      const select = document.querySelector("#stop");
+      for (const stop of stops) {
+        const marker = L.marker([stop.lat, stop.lng]).addTo(map);
+        marker.bindPopup(`<strong>${stop.name}</strong>${stop.note ? `<br>${stop.note}` : ""}`);
+        marker.on("click", () => {
+          if (select) select.value = stop.name;
+        });
+      }
+
+      // The live half: subscribe to the SSE stream and prepend sightings as
+      // they arrive. The form itself needs none of this — its POST +
+      // redirect re-renders the submitting tab from SQLite; this stream is
+      // how every other tab finds out.
+      const list = document.querySelector("#sightings");
       const source = new EventSource("/api/events");
-      source.addEventListener("message", (event) => {
-        const message = JSON.parse(event.data);
+      source.addEventListener("sighting", (event) => {
+        const sighting = JSON.parse(event.data);
         const item = document.createElement("li");
-        item.textContent = message.body;
+        item.innerHTML = `<strong>${sighting.stop}</strong> — ${sighting.note}`;
         list?.prepend(item);
       });
     </script>

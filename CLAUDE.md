@@ -1,11 +1,10 @@
 # Your harness
 
-This file is yours, and it arrives empty on purpose. The rules you hold the
-agent to are part of what gets marked, so they should be rules you decided on.
-
-Nothing about the starter is recorded here. What the repo ships is explained
-where it lives --- `fly.toml`, the `Dockerfile`, the CI workflow and
-`spec/README.md` each say what they fix --- and the
-[course website](https://comp.anu.edu.au/courses/comp4020-agentic-coding-studio/)
-publishes this deliverable's brief and spec. Read them before you plan or build;
-what the agent needs to carry from any of it is your call.
+- The core flow (report a sighting, reload, still there) must go through
+  SQLite via `src/lib/db.ts`, never in-memory state — that's the thing the
+  spec actually checks ("persists across a reload").
+- Stop names, order and schedule come from ANU's own published Civic Loop
+  timetable (`src/lib/stops.ts` cites the source) — never invent a stop or a
+  time, correct against the source page instead.
+- Mark any hand-placed/approximate value (coordinates, mock data) with a
+  `ponytail:` comment naming what would need to happen to make it exact.
