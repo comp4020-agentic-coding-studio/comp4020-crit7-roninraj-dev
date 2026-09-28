@@ -27,5 +27,6 @@ changed that: the parts of this app a rider actually depends on (where's the
 stop, when's the next bus) are exactly the parts I was tempted to eyeball. Going
 forward I want to default to citing a source for any value I can't derive, and
 to treat a computed approximation as a placeholder to be replaced, not a
-finished answer — with a `ponytail:` comment marking which one it is until
-then.
+finished answer — with a `ponytail:` comment marking which one it is until then.
+
+`ponytail:` is just coding plugin i added to help claude code better.
